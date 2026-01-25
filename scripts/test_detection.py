@@ -7,11 +7,13 @@ import sys
 from pathlib import Path
 
 import torch
-import torchaudio
+import soundfile as sf
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "model"))
 from model import get_model
 from phone_augment import PhoneConfig, PhoneDegradation, PhoneMelSpectrogram
+import torchaudio
 
 
 def load_model(checkpoint_path: str, model_name: str, device: str):
@@ -26,22 +28,20 @@ def load_model(checkpoint_path: str, model_name: str, device: str):
 
 def preprocess_audio(audio_path: str, config: PhoneConfig, degrader: PhoneDegradation):
     """Load and preprocess audio file."""
-    waveform, sr = torchaudio.load(audio_path)
+    # Use soundfile instead of torchaudio.load (no FFmpeg required)
+    audio_np, sr = sf.read(audio_path)
 
-    # Convert to mono
-    if waveform.shape[0] > 1:
-        waveform = waveform.mean(dim=0, keepdim=True)
+    # Convert to mono if stereo
+    if audio_np.ndim > 1:
+        audio_np = audio_np.mean(axis=1)
 
-    # Resample to 8kHz if needed
-    if sr != config.SAMPLE_RATE:
-        resampler = torchaudio.transforms.Resample(sr, config.SAMPLE_RATE)
-        waveform = resampler(waveform)
+    # Convert to tensor with shape (1, samples)
+    waveform = torch.tensor(audio_np.copy(), dtype=torch.float32).unsqueeze(0)
 
-    # Apply phone degradation
-    waveform_np = waveform.squeeze().numpy()
-    degraded = degrader.degrade(waveform_np)
+    # Apply phone degradation (handles resampling to 8kHz internally)
+    degraded = degrader(waveform, sr)
 
-    return torch.from_numpy(degraded).float()
+    return degraded.squeeze(0)
 
 
 def detect_deepfake(
@@ -50,7 +50,8 @@ def detect_deepfake(
     mel_transform: PhoneMelSpectrogram,
     degrader: PhoneDegradation,
     config: PhoneConfig,
-    device: str
+    device: str,
+    threshold: float = 0.5
 ) -> dict:
     """Run deepfake detection on a single audio file."""
 
@@ -83,12 +84,17 @@ def detect_deepfake(
     real_prob = probs[0, 0].item()
     fake_prob = probs[0, 1].item()
 
+    # Use threshold for classification
+    # If fake_prob >= threshold, classify as FAKE
+    prediction = 'FAKE' if fake_prob >= threshold else 'REAL'
+
     return {
         'file': audio_path,
-        'prediction': 'FAKE' if fake_prob > real_prob else 'REAL',
+        'prediction': prediction,
         'confidence': max(real_prob, fake_prob),
         'real_probability': real_prob,
-        'fake_probability': fake_prob
+        'fake_probability': fake_prob,
+        'threshold': threshold
     }
 
 
@@ -111,6 +117,7 @@ def print_result(result: dict, verbose: bool = False):
     if verbose:
         print(f"   Real: {result['real_probability']:.3f}")
         print(f"   Fake: {result['fake_probability']:.3f}")
+        print(f"   Threshold: {result['threshold']:.2f}")
 
 
 def main():
@@ -147,7 +154,7 @@ def main():
         try:
             result = detect_deepfake(
                 audio_path, model, mel_transform,
-                degrader, config, args.device
+                degrader, config, args.device, args.threshold
             )
             results.append(result)
             print_result(result, args.verbose)

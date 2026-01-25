@@ -105,7 +105,8 @@ class PhoneDegradation:
         # Apply filter
         filtered = signal.filtfilt(self.b, self.a, audio_np)
 
-        return torch.tensor(filtered, dtype=torch.float32).unsqueeze(0)
+        # Use .copy() to ensure contiguous array with positive strides
+        return torch.tensor(np.ascontiguousarray(filtered), dtype=torch.float32).unsqueeze(0)
 
     def _simulate_codec(self, waveform: torch.Tensor) -> torch.Tensor:
         """
@@ -261,11 +262,21 @@ def degrade_audio_file(
     degrader: Optional[PhoneDegradation] = None
 ):
     """Degrade a single audio file to phone quality."""
+    import soundfile as sf
+
     if degrader is None:
         degrader = PhoneDegradation()
 
-    # Load audio
-    waveform, sample_rate = torchaudio.load(input_path)
+    # Load audio using soundfile (no FFmpeg required)
+    audio_np, sample_rate = sf.read(input_path)
+
+    # Convert to torch tensor with shape (channels, samples)
+    # Use .copy() to avoid negative stride issues
+    if audio_np.ndim == 1:
+        waveform = torch.tensor(audio_np.copy(), dtype=torch.float32).unsqueeze(0)
+    else:
+        # Multi-channel: convert to (channels, samples)
+        waveform = torch.tensor(audio_np.T.copy(), dtype=torch.float32)
 
     # Convert to mono
     if waveform.shape[0] > 1:
@@ -274,8 +285,8 @@ def degrade_audio_file(
     # Apply degradation
     degraded = degrader(waveform, sample_rate)
 
-    # Save
-    torchaudio.save(output_path, degraded, degrader.config.SAMPLE_RATE)
+    # Save using soundfile
+    sf.write(output_path, degraded.squeeze().numpy(), degrader.config.SAMPLE_RATE)
 
 
 if __name__ == "__main__":
