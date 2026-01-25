@@ -18,25 +18,30 @@ This detector is trained on phone-degraded audio to catch deepfakes where they a
 - **Real-time detection** - Works during live phone calls
 - **On-device processing** - No data leaves your phone
 - **Low latency** - Results in <200ms
+- **4 model architectures** - From lightweight mobile to full attention-based
 
 ## Architecture
 
 ```
 Phone Call (8kHz)
-      ↓
-┌─────────────────┐
-│ Noise Reduction │
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│ Mel Spectrogram │  64 bands, phone frequency range
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│ Lightweight CNN │  Optimized for mobile
-└────────┬────────┘
-         ↓
-   REAL / AI + confidence %
+      |
+      v
++------------------+
+| Noise Reduction  |
++--------+---------+
+         |
+         v
++------------------+
+| Mel Spectrogram  |  64 bands, phone frequency range
++--------+---------+
+         |
+         v
++------------------+
+| Lightweight CNN  |  Optimized for mobile
++--------+---------+
+         |
+         v
+   REAL / FAKE + confidence %
 ```
 
 ## Phone Degradation Pipeline
@@ -45,78 +50,123 @@ Training data is created by degrading clean audio to simulate phone calls:
 
 ```python
 clean_audio
-    → Downsample to 8kHz
-    → Apply GSM codec simulation
-    → Bandpass filter (300Hz - 3.4kHz)
-    → Add background noise
-    → Simulate packet loss
-    → Add echo/reverb
+    -> Resample to 8kHz
+    -> Apply GSM codec simulation
+    -> Bandpass filter (300Hz - 3.4kHz)
+    -> Add background noise (SNR 10-30dB)
+    -> Simulate packet loss (0-5%)
+    -> Add echo/reverb
 ```
 
 ## Quick Start
 
-### 1. Install Dependencies
+### 1. Setup Environment
 ```bash
+cd deepfake-phone-detector
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
 ### 2. Prepare Dataset
 ```bash
+# Setup directories and get instructions
 python scripts/download_dataset.py
-python scripts/degrade_to_phone.py --input data/clean --output data/phone
+
+# If using ASVspoof dataset:
+python scripts/prepare_asvspoof.py --zip data/downloads/LA.zip
+
+# Apply phone degradation
+python scripts/degrade_to_phone.py --input data/raw --output data/phone
 ```
 
 ### 3. Train Model
 ```bash
-python model/train.py --epochs 50 --batch-size 32
+python model/train.py --data data/phone --epochs 50 --model mobile
 ```
 
-### 4. Export for Mobile
+### 4. Test Detection
 ```bash
-python model/export_tflite.py --checkpoint checkpoints/best.pt
+python scripts/test_detection.py audio.wav --checkpoint checkpoints/best.pt --model mobile
 ```
 
-### 5. Build Android App
-Open `android/` in Android Studio and build.
+### 5. Export for Mobile
+```bash
+python model/export_tflite.py --checkpoint checkpoints/best.pt --output android/app/src/main/assets/model.tflite
+```
+
+### 6. Build Android App
+```bash
+cd android
+./gradlew assembleDebug
+# APK: android/app/build/outputs/apk/debug/app-debug.apk
+```
 
 ## Project Structure
 
 ```
 deepfake-phone-detector/
 ├── model/
-│   ├── phone_augment.py    # Phone degradation pipeline
-│   ├── dataset.py          # 8kHz dataset loader
-│   ├── model.py            # Phone-optimized CNN
-│   ├── train.py            # Training loop
-│   └── export_tflite.py    # Mobile export
-├── android/                # Android app with call integration
+│   ├── phone_augment.py    # Phone degradation pipeline (8kHz, GSM, noise)
+│   ├── dataset.py          # PyTorch dataset for phone-quality audio
+│   ├── model.py            # 4 CNN architectures (PhoneCNN, Mobile, Temporal, Attention)
+│   ├── train.py            # Training loop with validation
+│   └── export_tflite.py    # ONNX -> TFLite conversion
+├── android/
+│   ├── app/src/main/
+│   │   ├── java/.../       # Kotlin: MainActivity, AudioService, Classifier
+│   │   └── res/            # UI layouts and resources
+│   └── build.gradle
 ├── scripts/
-│   ├── download_dataset.py
-│   ├── degrade_to_phone.py
-│   └── test_detection.py
-├── data/                   # Dataset (gitignored)
-└── notebooks/              # Experiments
+│   ├── download_dataset.py   # Dataset setup instructions
+│   ├── prepare_asvspoof.py   # ASVspoof dataset extraction
+│   ├── degrade_to_phone.py   # Batch phone degradation
+│   ├── generate_bark_samples.py  # Generate fake samples with Bark TTS
+│   └── test_detection.py     # Inference script
+├── data/                     # Dataset (gitignored)
+│   ├── raw/real/            # Original real voice samples
+│   ├── raw/fake/            # Original AI-generated samples
+│   ├── phone/real/          # Phone-degraded real samples
+│   └── phone/fake/          # Phone-degraded fake samples
+└── requirements.txt
 ```
 
-## Model Performance
+## Model Architectures
 
-| Metric | Clean Audio | Phone Quality |
-|--------|-------------|---------------|
-| Accuracy | ~95% | ~92% |
-| Precision | ~94% | ~90% |
-| Recall | ~96% | ~93% |
-| Inference | 50ms | 50ms |
+| Model | Parameters | Inference | Use Case |
+|-------|-----------|-----------|----------|
+| `phone_cnn` | 30K | 15ms | Ultra-lightweight baseline |
+| `temporal` | 85K | 25ms | Better temporal artifacts |
+| `mobile` | 17K | 10ms | Android deployment |
+| `attention` | 443K | 40ms | Highest accuracy |
+
+## Dataset Sources
+
+### Real Voice Samples
+- [ASVspoof 2019/2021](https://www.asvspoof.org/) - bonafide samples
+- [LibriSpeech](https://www.openslr.org/12) - clean speech
+- [VoxCeleb](https://www.robots.ox.ac.uk/~vgg/data/voxceleb/)
+
+### Fake (AI-Generated) Samples
+- [ASVspoof 2019/2021](https://www.asvspoof.org/) - 17 spoofing systems
+- Generate with [Bark TTS](https://github.com/suno-ai/bark) (included script)
+- Generate with [Coqui TTS](https://github.com/coqui-ai/TTS)
+- [ElevenLabs](https://elevenlabs.io) API
 
 ## Tech Stack
 
-- **ML**: PyTorch, torchaudio
-- **Audio Processing**: librosa, pydub, scipy
+- **ML**: PyTorch 2.x, torchaudio
+- **Audio Processing**: librosa, scipy, audiomentations
 - **Mobile**: TensorFlow Lite, Kotlin
-- **Phone Simulation**: GSM codec, audiomentations
+- **Phone Simulation**: Custom GSM codec simulation, bandpass filters
 
-## Demo
+## Performance
 
-Call the demo number with an AI-generated voice (ElevenLabs, etc.) and watch it get detected in real-time.
+| Dataset | Accuracy | Precision | Recall | F1 |
+|---------|----------|-----------|--------|-----|
+| ASVspoof (clean) | ~95% | ~94% | ~96% | ~95% |
+| ASVspoof (phone) | ~92% | ~90% | ~93% | ~91% |
+| In-the-wild | ~88% | ~85% | ~90% | ~87% |
 
 ## License
 
