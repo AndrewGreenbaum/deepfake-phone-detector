@@ -252,7 +252,7 @@ class TestCreateDataloaders:
         """Test that dataloaders are created correctly."""
         from dataset import create_dataloaders
 
-        train_loader, val_loader, test_loader = create_dataloaders(
+        train_loader, val_loader, test_loader, holdout_loader = create_dataloaders(
             dataset_dir,
             batch_size=4,
             num_workers=0,  # Use 0 workers for testing
@@ -262,12 +262,13 @@ class TestCreateDataloaders:
         assert train_loader is not None
         assert val_loader is not None
         assert test_loader is not None
+        assert holdout_loader is None  # No holdout TTS specified
 
     def test_dataloader_splits(self, dataset_dir):
         """Test that data is split correctly."""
         from dataset import create_dataloaders
 
-        train_loader, val_loader, test_loader = create_dataloaders(
+        train_loader, val_loader, test_loader, _ = create_dataloaders(
             dataset_dir,
             batch_size=4,
             train_split=0.8,
@@ -288,7 +289,7 @@ class TestCreateDataloaders:
         """Test that batches have correct shape."""
         from dataset import create_dataloaders
 
-        train_loader, _, _ = create_dataloaders(
+        train_loader, _, _, _ = create_dataloaders(
             dataset_dir,
             batch_size=4,
             num_workers=0,
