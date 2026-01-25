@@ -344,6 +344,8 @@ def main():
     parser.add_argument("--warmup-epochs", type=int, default=5, help="LR warmup epochs")
     parser.add_argument("--no-class-weights", action="store_true",
                         help="Disable class weighting for imbalanced data")
+    parser.add_argument("--holdout-tts", type=str, default=None,
+                        help="TTS system to hold out for cross-system validation (e.g., elevenlabs, bark, edge)")
 
     args = parser.parse_args()
 
@@ -353,11 +355,18 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Data
-    train_loader, val_loader, test_loader = create_dataloaders(
+    train_loader, val_loader, test_loader, holdout_loader = create_dataloaders(
         args.data,
         batch_size=args.batch_size,
-        apply_degradation=not args.no_degrade
+        apply_degradation=not args.no_degrade,
+        holdout_tts=args.holdout_tts,
     )
+
+    if args.holdout_tts:
+        print(f"\n** Cross-system validation mode **")
+        print(f"** Holdout TTS: {args.holdout_tts} **")
+        if holdout_loader:
+            print(f"** Holdout samples will be evaluated after training **\n")
 
     # Compute class weights if enabled
     class_weights = None
@@ -379,6 +388,51 @@ def main():
         class_weights=class_weights
     )
     trainer.train(args.epochs, save_dir=args.save_dir, patience=args.patience)
+
+    # Evaluate on holdout set if specified
+    if args.holdout_tts and holdout_loader:
+        print(f"\n{'='*60}")
+        print(f"Cross-System Evaluation: {args.holdout_tts}")
+        print(f"{'='*60}")
+
+        # Load best model for evaluation
+        best_checkpoint = os.path.join(args.save_dir, 'best_model.pt')
+        if os.path.exists(best_checkpoint):
+            checkpoint = torch.load(best_checkpoint, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"Loaded best model (val acc: {checkpoint['val_acc']:.2f}%)")
+
+        model.eval()
+        correct, total = 0, 0
+        fake_correct, fake_total = 0, 0
+
+        with torch.no_grad():
+            for inputs, labels in tqdm(holdout_loader, desc=f"Evaluating {args.holdout_tts}"):
+                inputs, labels = inputs.to(device), labels.to(device)
+                outputs = model(inputs)
+                _, predicted = outputs.max(1)
+
+                total += labels.size(0)
+                correct += predicted.eq(labels).sum().item()
+
+                # Track fake detection specifically
+                fake_mask = labels == 1
+                if fake_mask.any():
+                    fake_total += fake_mask.sum().item()
+                    fake_correct += (predicted[fake_mask] == 1).sum().item()
+
+        holdout_acc = 100. * correct / total if total > 0 else 0
+        fake_detection_rate = 100. * fake_correct / fake_total if fake_total > 0 else 0
+
+        print(f"\nHoldout Results ({args.holdout_tts}):")
+        print(f"  Overall Accuracy: {holdout_acc:.2f}%")
+        print(f"  Fake Detection Rate: {fake_detection_rate:.2f}% ({fake_correct}/{fake_total})")
+
+        if holdout_acc >= 85:
+            print(f"\n** SUCCESS: Model generalizes to {args.holdout_tts}! **")
+        else:
+            print(f"\n** WARNING: Model may be overfitting to training TTS systems **")
+            print(f"** Consider adding more diverse TTS samples to training **")
 
 
 if __name__ == "__main__":

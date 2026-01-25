@@ -33,3 +33,11 @@ pytest>=7.4.0
 
 # Audio augmentation
 audiomentations>=0.31.0
+
+# TTS generation (optional - for generating fake samples)
+edge-tts>=6.1.0  # Free, no API key
+elevenlabs>=1.0.0  # Requires API key
+python-dotenv>=1.0.0
+
+# Dataset downloads
+requests>=2.28.0

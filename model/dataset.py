@@ -32,8 +32,21 @@ class PhoneAudioDataset(Dataset):
         csv_file: Optional[str] = None,
         config: PhoneConfig = PhoneConfig(),
         apply_degradation: bool = True,
-        augment: bool = True
+        augment: bool = True,
+        holdout_tts: Optional[str] = None,
+        holdout_only: bool = False,
     ):
+        """Initialize phone audio dataset.
+
+        Args:
+            data_path: Root data directory
+            csv_file: Optional CSV file with filepath,label columns
+            config: Phone audio configuration
+            apply_degradation: Whether to apply phone degradation
+            augment: Whether to apply data augmentation
+            holdout_tts: TTS system to exclude from training (e.g., "elevenlabs")
+            holdout_only: If True, only load holdout TTS samples
+        """
         self.config = config
         self.apply_degradation = apply_degradation
         self.augment = augment
@@ -46,36 +59,88 @@ class PhoneAudioDataset(Dataset):
         if csv_file and os.path.exists(csv_file):
             self.samples = self._load_from_csv(csv_file)
         else:
-            self.samples = self._load_from_directory(data_path)
+            self.samples = self._load_from_directory(
+                data_path,
+                holdout_tts=holdout_tts,
+                holdout_only=holdout_only,
+            )
 
         print(f"Loaded {len(self.samples)} samples")
         real_count = sum(1 for _, l in self.samples if l == 0)
         fake_count = sum(1 for _, l in self.samples if l == 1)
         print(f"  Real: {real_count}, Fake: {fake_count}")
 
+        if holdout_tts:
+            mode = "holdout only" if holdout_only else "excluding holdout"
+            print(f"  Holdout TTS: {holdout_tts} ({mode})")
+
     def _load_from_csv(self, csv_file: str) -> List[Tuple[str, int]]:
         """Load samples from CSV file."""
         df = pd.read_csv(csv_file)
         return [(row['filepath'], row['label']) for _, row in df.iterrows()]
 
-    def _load_from_directory(self, data_path: str) -> List[Tuple[str, int]]:
-        """Load samples from directory structure (real/ and fake/ folders)."""
+    def _load_from_directory(
+        self,
+        data_path: str,
+        holdout_tts: Optional[str] = None,
+        holdout_only: bool = False,
+    ) -> List[Tuple[str, int]]:
+        """Load samples from directory structure.
+
+        Supports two directory layouts:
+        1. Flat: data/real/*.wav, data/fake/*.wav
+        2. Nested by TTS: data/real/*.wav, data/fake/edge/*.wav, data/fake/bark/*.wav
+
+        Args:
+            data_path: Root data directory
+            holdout_tts: TTS system to exclude (e.g., "elevenlabs")
+            holdout_only: If True, only load holdout samples (for testing)
+
+        Returns:
+            List of (filepath, label) tuples
+        """
         samples = []
         data_path = Path(data_path)
 
-        # Real samples (label = 0)
-        real_dir = data_path / 'real'
-        if real_dir.exists():
-            for f in real_dir.iterdir():
-                if f.suffix in ['.wav', '.flac', '.mp3', '.ogg']:
-                    samples.append((str(f), 0))
+        # Real samples (label = 0) - always included unless holdout_only
+        if not holdout_only:
+            real_dir = data_path / 'real'
+            if real_dir.exists():
+                for f in real_dir.rglob('*'):
+                    if f.is_file() and f.suffix in ['.wav', '.flac', '.mp3', '.ogg']:
+                        samples.append((str(f), 0))
 
         # Fake samples (label = 1)
         fake_dir = data_path / 'fake'
         if fake_dir.exists():
-            for f in fake_dir.iterdir():
-                if f.suffix in ['.wav', '.flac', '.mp3', '.ogg']:
-                    samples.append((str(f), 1))
+            # Check for nested TTS subdirectories
+            subdirs = [d for d in fake_dir.iterdir() if d.is_dir()]
+
+            if subdirs:
+                # Nested structure: fake/edge/, fake/bark/, fake/elevenlabs/
+                for subdir in subdirs:
+                    tts_name = subdir.name.lower()
+
+                    # Handle holdout logic
+                    if holdout_tts:
+                        if holdout_only:
+                            # Only include holdout TTS
+                            if tts_name != holdout_tts.lower():
+                                continue
+                        else:
+                            # Exclude holdout TTS from training
+                            if tts_name == holdout_tts.lower():
+                                continue
+
+                    for f in subdir.rglob('*'):
+                        if f.is_file() and f.suffix in ['.wav', '.flac', '.mp3', '.ogg']:
+                            samples.append((str(f), 1))
+            else:
+                # Flat structure: fake/*.wav
+                if not holdout_only:  # Can't filter flat structure
+                    for f in fake_dir.iterdir():
+                        if f.is_file() and f.suffix in ['.wav', '.flac', '.mp3', '.ogg']:
+                            samples.append((str(f), 1))
 
         return samples
 
@@ -221,18 +286,34 @@ def create_dataloaders(
     train_split: float = 0.8,
     val_split: float = 0.1,
     num_workers: int = 4,
-    apply_degradation: bool = True
-) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    """Create train, validation, and test dataloaders."""
+    apply_degradation: bool = True,
+    holdout_tts: Optional[str] = None,
+) -> Tuple[DataLoader, DataLoader, DataLoader, Optional[DataLoader]]:
+    """Create train, validation, test, and optionally holdout dataloaders.
 
+    Args:
+        data_path: Root data directory
+        batch_size: Batch size for dataloaders
+        train_split: Fraction for training set
+        val_split: Fraction for validation set
+        num_workers: Number of data loading workers
+        apply_degradation: Whether to apply phone degradation
+        holdout_tts: TTS system to hold out for cross-system eval
+
+    Returns:
+        Tuple of (train_loader, val_loader, test_loader, holdout_loader)
+        holdout_loader is None if holdout_tts is not specified
+    """
     config = PhoneConfig()
 
-    # Create dataset
+    # Create main dataset (excludes holdout TTS if specified)
     full_dataset = PhoneAudioDataset(
         data_path,
         config=config,
         apply_degradation=apply_degradation,
-        augment=True
+        augment=True,
+        holdout_tts=holdout_tts,
+        holdout_only=False,
     )
 
     # Split
@@ -272,7 +353,31 @@ def create_dataloaders(
         pin_memory=True
     )
 
-    return train_loader, val_loader, test_loader
+    # Create holdout loader if TTS system specified
+    holdout_loader = None
+    if holdout_tts:
+        holdout_dataset = PhoneAudioDataset(
+            data_path,
+            config=config,
+            apply_degradation=apply_degradation,
+            augment=False,  # No augmentation for holdout eval
+            holdout_tts=holdout_tts,
+            holdout_only=True,  # Only holdout samples
+        )
+
+        if len(holdout_dataset) > 0:
+            holdout_loader = DataLoader(
+                holdout_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=True
+            )
+            print(f"Holdout set ({holdout_tts}): {len(holdout_dataset)} samples")
+        else:
+            print(f"Warning: No samples found for holdout TTS: {holdout_tts}")
+
+    return train_loader, val_loader, test_loader, holdout_loader
 
 
 if __name__ == "__main__":
