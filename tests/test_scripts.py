@@ -282,6 +282,99 @@ class TestPrintResult:
         assert 'Threshold:' in captured.out
 
 
+class TestElevenLabsScript:
+    """Test ElevenLabs generation script."""
+
+    def test_voices_list_populated(self):
+        """Test VOICES list has voice IDs."""
+        from generate_elevenlabs_samples import VOICES
+        assert len(VOICES) > 0
+        # Voice IDs are typically 20-21 character alphanumeric strings
+        for voice_id in VOICES:
+            assert len(voice_id) >= 20 and len(voice_id) <= 24
+
+    def test_phrases_lists_populated(self):
+        """Test phrase lists have content."""
+        from generate_elevenlabs_samples import SCAM_PHRASES, NORMAL_PHRASES
+        assert len(SCAM_PHRASES) > 0
+        assert len(NORMAL_PHRASES) > 0
+
+    def test_models_dict_valid(self):
+        """Test MODELS dictionary has valid entries."""
+        from generate_elevenlabs_samples import MODELS
+        assert len(MODELS) > 0
+        for key, value in MODELS.items():
+            assert value.startswith("eleven_")
+
+    def test_missing_api_key_prints_error(self, capsys, monkeypatch):
+        """Test error message when API key missing."""
+        from generate_elevenlabs_samples import generate_samples
+
+        monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+        generate_samples("/tmp/test", num_samples=1)
+
+        captured = capsys.readouterr()
+        assert "ELEVENLABS_API_KEY" in captured.out
+
+    @patch('generate_elevenlabs_samples.ElevenLabs')
+    def test_generate_sample_writes_file(self, mock_client_class):
+        """Test generate_sample writes audio to file."""
+        from generate_elevenlabs_samples import generate_sample
+
+        # Mock the client
+        mock_client = MagicMock()
+        mock_client.text_to_speech.convert.return_value = [b'fake audio data']
+
+        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
+            result = generate_sample(
+                mock_client, "test text", "voice_id", f.name
+            )
+
+            assert result == True
+            assert Path(f.name).exists()
+            assert Path(f.name).stat().st_size > 0
+            Path(f.name).unlink()
+
+    @patch('generate_elevenlabs_samples.ElevenLabs')
+    def test_generate_sample_rate_limit_returns_false(self, mock_client_class):
+        """Test rate limit handling returns False."""
+        from generate_elevenlabs_samples import generate_sample
+        from elevenlabs.core import ApiError
+
+        mock_client = MagicMock()
+        # Create a mock ApiError for rate limiting
+        mock_error = MagicMock(spec=ApiError)
+        mock_error.__str__ = lambda self: "rate limit exceeded 429"
+        mock_client.text_to_speech.convert.side_effect = ApiError(
+            status_code=429, body={"detail": "rate limit exceeded"}
+        )
+
+        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
+            result = generate_sample(
+                mock_client, "test", "voice_id", f.name
+            )
+            assert result == False
+            Path(f.name).unlink(missing_ok=True)
+
+    def test_all_voices_have_valid_format(self):
+        """Test that all voice IDs are alphanumeric."""
+        from generate_elevenlabs_samples import VOICES
+        import re
+        for voice_id in VOICES:
+            # Voice IDs should be alphanumeric
+            assert re.match(r'^[a-zA-Z0-9]+$', voice_id), f"Invalid voice ID format: {voice_id}"
+
+    def test_phrases_are_complete_sentences(self):
+        """Test that phrases are properly formed sentences."""
+        from generate_elevenlabs_samples import SCAM_PHRASES, NORMAL_PHRASES
+        all_phrases = SCAM_PHRASES + NORMAL_PHRASES
+        for phrase in all_phrases:
+            # Each phrase should end with proper punctuation
+            assert phrase[-1] in '.!?', f"Phrase missing punctuation: {phrase}"
+            # Each phrase should have reasonable length
+            assert len(phrase) > 10, f"Phrase too short: {phrase}"
+
+
 class TestAudioFormats:
     """Test handling of different audio formats."""
 
