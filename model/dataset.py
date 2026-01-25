@@ -80,12 +80,19 @@ class PhoneAudioDataset(Dataset):
         return samples
 
     def _load_audio(self, filepath: str) -> Tuple[torch.Tensor, int]:
-        """Load audio file."""
-        waveform, sr = torchaudio.load(filepath)
+        """Load audio file using soundfile for better FFmpeg compatibility."""
+        # Use soundfile instead of torchaudio for better compatibility
+        audio, sr = sf.read(filepath)
 
-        # Convert to mono
-        if waveform.shape[0] > 1:
-            waveform = waveform.mean(dim=0, keepdim=True)
+        # Convert to float32 and ensure contiguous
+        audio = np.ascontiguousarray(audio.astype(np.float32))
+
+        # Handle stereo -> mono
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+
+        # Convert to tensor with channel dimension
+        waveform = torch.from_numpy(audio).unsqueeze(0)
 
         return waveform, sr
 
