@@ -1,0 +1,36 @@
+# Core ML
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Audio processing
+librosa>=0.10.0
+soundfile>=0.12.0
+scipy>=1.11.0
+pydub>=0.25.0
+
+# Data
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# TFLite export
+tensorflow>=2.13.0
+onnx>=1.14.0
+onnx-tf>=1.10.0
+
+# Utils
+tqdm>=4.65.0
+pyyaml>=6.0
+
+# Jupyter
+jupyter>=1.0.0
+
+# Testing
+pytest>=7.4.0
+
+# Audio augmentation
+audiomentations>=0.31.0

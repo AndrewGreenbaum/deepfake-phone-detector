@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Data
+data/
+*.wav
+*.flac
+*.mp3
+
+# Model checkpoints
+checkpoints/
+*.pt
+*.pth
+*.onnx
+*.tflite
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+*.apk
