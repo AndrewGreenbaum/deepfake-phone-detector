@@ -62,6 +62,24 @@ training:
   # Gradient clipping max norm
   grad_clip: 1.0
 
+  # Random seed for reproducibility
+  seed: 42
+
+  # Early stopping patience (epochs without improvement)
+  patience: 10
+
+  # Mixed precision training (AMP) - faster on GPU
+  use_amp: true
+
+  # Gradient accumulation steps (effective_batch = batch_size * grad_accum)
+  grad_accum_steps: 1
+
+  # Learning rate warmup epochs
+  warmup_epochs: 5
+
+  # Use class weights for imbalanced datasets
+  use_class_weights: true
+
   # Learning rate scheduler
   scheduler:
     type: cosine  # cosine, step, plateau
