@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Deepfake Detector</string>
+    <string name="start_detection">Start Detection</string>
+    <string name="stop_detection">Stop Detection</string>
+    <string name="status_idle">Tap to start monitoring</string>
+    <string name="status_listening">Listening for audio...</string>
+    <string name="status_analyzing">Analyzing...</string>
+    <string name="result_real">REAL</string>
+    <string name="result_fake">FAKE - Possible Deepfake!</string>
+    <string name="confidence">Confidence: %1$.1f%%</string>
+    <string name="notification_channel">Deepfake Detection</string>
+    <string name="notification_title">Monitoring Audio</string>
+    <string name="notification_text">Analyzing for deepfakes...</string>
+</resources>
