@@ -6,6 +6,8 @@ Handles 8kHz audio with phone degradation augmentation.
 import os
 import torch
 import torchaudio
+import soundfile as sf
+import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 from typing import Tuple, Optional, List
@@ -176,17 +178,24 @@ class PreDegradedDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
         filepath, label = self.samples[idx]
 
-        waveform, sr = torchaudio.load(filepath)
+        # Use soundfile instead of torchaudio for better FFmpeg compatibility
+        audio, sr = sf.read(filepath)
 
-        # Should already be 8kHz, but check
+        # Convert to float32 and ensure contiguous
+        audio = np.ascontiguousarray(audio.astype(np.float32))
+
+        # Handle stereo -> mono
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+
+        # Convert to tensor with channel dimension
+        waveform = torch.from_numpy(audio).unsqueeze(0)
+
+        # Should already be 8kHz, but resample if needed
         if sr != self.config.SAMPLE_RATE:
             waveform = torchaudio.functional.resample(
                 waveform, sr, self.config.SAMPLE_RATE
             )
-
-        # Mono
-        if waveform.shape[0] > 1:
-            waveform = waveform.mean(dim=0, keepdim=True)
 
         # Fixed length
         target = self.config.NUM_SAMPLES
