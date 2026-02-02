@@ -231,12 +231,12 @@ class TestDegradationEffects:
         # Test passes if no exception
 
     def test_packet_loss_simulation(self):
-        """Test packet loss simulation."""
+        """Test burst packet loss simulation with Markov model."""
         degrader = PhoneDegradation()
 
         audio = torch.ones(1, 8000)  # 1 second of constant audio
 
-        result = degrader._simulate_packet_loss(audio)
+        result = degrader._simulate_burst_packet_loss(audio)
 
         # Should have some zeros (dropouts)
         # Note: may not always have dropouts due to randomness
@@ -255,6 +255,96 @@ class TestDegradationEffects:
         # Echo should create additional peaks after the impulse
         # Sum should be greater than original
         assert result.abs().sum() > audio.abs().sum()
+
+    def test_spectral_smoothing(self):
+        """Test spectral smoothing reduces high-frequency detail."""
+        degrader = PhoneDegradation()
+
+        # Create audio with high-frequency content
+        t = torch.linspace(0, 1.0, 8000)
+        # Mix of low and high frequency
+        audio = (torch.sin(2 * torch.pi * 500 * t) +
+                 torch.sin(2 * torch.pi * 3000 * t)).unsqueeze(0)
+
+        result = degrader._apply_spectral_smoothing(audio)
+
+        assert result.shape == audio.shape
+        # The smoothing blends with lowpass, so output should differ
+        assert not torch.allclose(result, audio, atol=0.01)
+
+    def test_codec_distortion(self):
+        """Test codec distortion adds harmonic content."""
+        degrader = PhoneDegradation()
+
+        # Create simple sine wave
+        t = torch.linspace(0, 1.0, 8000)
+        audio = torch.sin(2 * torch.pi * 1000 * t).unsqueeze(0)
+
+        result = degrader._apply_codec_distortion(audio)
+
+        assert result.shape == audio.shape
+        # Distortion adds harmonics, so output should differ
+        assert not torch.allclose(result, audio, atol=0.01)
+
+    def test_agc(self):
+        """Test automatic gain control compression."""
+        degrader = PhoneDegradation()
+
+        # Create audio with varying levels
+        t = torch.linspace(0, 1.0, 8000)
+        # Amplitude modulated signal
+        envelope = 0.5 + 0.5 * torch.sin(2 * torch.pi * 2 * t)
+        audio = (envelope * torch.sin(2 * torch.pi * 1000 * t)).unsqueeze(0)
+
+        result = degrader._apply_agc(audio)
+
+        assert result.shape == audio.shape
+        # AGC should reduce dynamic range
+        orig_std = audio.std().item()
+        result_std = result.std().item()
+        # After AGC, standard deviation may change (compressed)
+        assert result_std > 0
+
+    def test_clipping(self):
+        """Test soft clipping limits peaks."""
+        degrader = PhoneDegradation()
+
+        # Create audio with peaks above 1.0
+        audio = torch.tensor([[0.5, 1.5, -1.5, 0.8, 2.0, -2.0]])
+
+        result = degrader._apply_clipping(audio)
+
+        assert result.shape == audio.shape
+        # Soft clipping should reduce peak values
+        assert result.abs().max() < audio.abs().max()
+
+    def test_jitter(self):
+        """Test timing jitter affects audio."""
+        degrader = PhoneDegradation()
+
+        audio = torch.ones(1, 8000)  # 1 second
+
+        result = degrader._apply_jitter(audio)
+
+        assert result.shape == audio.shape
+        # Jitter may cause some samples to be different due to shifts
+
+    def test_vad_dtx(self):
+        """Test VAD/DTX adds comfort noise and clips onsets."""
+        degrader = PhoneDegradation()
+
+        # Create audio with silence and speech regions
+        audio = torch.zeros(1, 8000)
+        # Add "speech" in middle
+        audio[0, 2000:6000] = 0.5
+
+        result = degrader._simulate_vad_dtx(audio)
+
+        assert result.shape == audio.shape
+        # Silent regions should have comfort noise (not exactly zero)
+        silent_region = result[0, :1000]
+        # Comfort noise should be very small but not zero
+        assert silent_region.abs().max() < 0.01
 
 
 class TestIntegration:

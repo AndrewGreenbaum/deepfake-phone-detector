@@ -6,8 +6,14 @@ Simulates the audio quality of real phone calls:
 - Telephone bandpass filter (300Hz - 3.4kHz)
 - 8kHz sample rate
 - Background noise
-- Packet loss simulation
+- Packet loss simulation (with burst model)
 - Echo and reverb
+- VAD/DTX onset clipping and comfort noise
+- Spectral smoothing (codec-style)
+- Soft clipping (microphone saturation)
+- AGC (automatic gain control)
+- Jitter (timing variations)
+- Codec harmonic distortion
 """
 
 import numpy as np
@@ -48,19 +54,40 @@ class PhoneDegradation:
         noise_prob: float = 0.7,
         codec_prob: float = 0.9,
         packet_loss_prob: float = 0.3,
-        echo_prob: float = 0.2
+        echo_prob: float = 0.2,
+        # New parameters for enhanced realism
+        vad_prob: float = 0.5,
+        clipping_prob: float = 0.3,
+        agc_prob: float = 0.6,
+        jitter_prob: float = 0.4,
+        spectral_smoothing_prob: float = 0.7,
+        codec_distortion_prob: float = 0.5,
     ):
         self.config = config
         self.noise_prob = noise_prob
         self.codec_prob = codec_prob
         self.packet_loss_prob = packet_loss_prob
         self.echo_prob = echo_prob
+        self.vad_prob = vad_prob
+        self.clipping_prob = clipping_prob
+        self.agc_prob = agc_prob
+        self.jitter_prob = jitter_prob
+        self.spectral_smoothing_prob = spectral_smoothing_prob
+        self.codec_distortion_prob = codec_distortion_prob
 
         # Pre-compute bandpass filter coefficients
         self.b, self.a = signal.butter(
             4,
             [config.LOW_FREQ, config.HIGH_FREQ],
             btype='band',
+            fs=config.SAMPLE_RATE
+        )
+
+        # Pre-compute spectral smoothing lowpass filter (above 2kHz)
+        self.smooth_b, self.smooth_a = signal.butter(
+            2,
+            2000,
+            btype='low',
             fs=config.SAMPLE_RATE
         )
 
@@ -76,23 +103,47 @@ class PhoneDegradation:
         # 2. Apply telephone bandpass filter
         waveform = self._apply_bandpass(waveform)
 
-        # 3. Simulate codec compression (GSM-like artifacts)
+        # 3. Apply spectral smoothing (codec-style high-freq loss)
+        if random.random() < self.spectral_smoothing_prob:
+            waveform = self._apply_spectral_smoothing(waveform)
+
+        # 4. Simulate codec compression (GSM-like artifacts)
         if random.random() < self.codec_prob:
             waveform = self._simulate_codec(waveform)
 
-        # 4. Add background noise
+        # 5. Apply codec distortion (harmonic distortion + resonance)
+        if random.random() < self.codec_distortion_prob:
+            waveform = self._apply_codec_distortion(waveform)
+
+        # 6. Apply AGC (automatic gain control)
+        if random.random() < self.agc_prob:
+            waveform = self._apply_agc(waveform)
+
+        # 7. Apply soft clipping (microphone saturation)
+        if random.random() < self.clipping_prob:
+            waveform = self._apply_clipping(waveform)
+
+        # 8. Add background noise
         if random.random() < self.noise_prob:
             waveform = self._add_noise(waveform)
 
-        # 5. Simulate packet loss
+        # 9. Simulate burst packet loss
         if random.random() < self.packet_loss_prob:
-            waveform = self._simulate_packet_loss(waveform)
+            waveform = self._simulate_burst_packet_loss(waveform)
 
-        # 6. Add echo
+        # 10. Apply jitter (timing variations)
+        if random.random() < self.jitter_prob:
+            waveform = self._apply_jitter(waveform)
+
+        # 11. Simulate VAD/DTX (onset clipping + comfort noise)
+        if random.random() < self.vad_prob:
+            waveform = self._simulate_vad_dtx(waveform)
+
+        # 12. Add echo
         if random.random() < self.echo_prob:
             waveform = self._add_echo(waveform)
 
-        # 7. Normalize
+        # 13. Normalize
         waveform = self._normalize(waveform)
 
         return waveform
@@ -107,6 +158,25 @@ class PhoneDegradation:
 
         # Use .copy() to ensure contiguous array with positive strides
         return torch.tensor(np.ascontiguousarray(filtered), dtype=torch.float32).unsqueeze(0)
+
+    def _apply_spectral_smoothing(self, waveform: torch.Tensor) -> torch.Tensor:
+        """
+        Simulate codec spectral smoothing.
+
+        Codecs use LPC-based encoding which smooths spectral detail,
+        especially in higher frequencies. This reduces fricative clarity.
+        """
+        audio = waveform.numpy().squeeze()
+
+        # Blend original with lowpass-filtered version for spectral smoothing
+        # This simulates LPC-based codec smoothing effect
+        smoothed = signal.filtfilt(self.smooth_b, self.smooth_a, audio)
+
+        # Random blend amount (more smoothing = more codec-like)
+        blend = random.uniform(0.2, 0.5)
+        result = audio * (1 - blend) + smoothed * blend
+
+        return torch.tensor(np.ascontiguousarray(result), dtype=torch.float32).unsqueeze(0)
 
     def _simulate_codec(self, waveform: torch.Tensor) -> torch.Tensor:
         """
@@ -143,6 +213,96 @@ class PhoneDegradation:
 
         return torch.tensor(processed, dtype=torch.float32).unsqueeze(0)
 
+    def _apply_codec_distortion(self, waveform: torch.Tensor) -> torch.Tensor:
+        """
+        Add harmonic distortion and resonance typical of low-bitrate codecs.
+
+        Creates the "metallic" or "buzzy" quality heard on poor phone connections.
+        """
+        audio = waveform.numpy().squeeze()
+
+        # Add subtle harmonic distortion (2nd and 3rd harmonics)
+        # This simulates non-linear codec behavior
+        distortion_amount = random.uniform(0.02, 0.08)
+
+        # Soft harmonic generation
+        harmonics = (
+            distortion_amount * 0.6 * np.sign(audio) * audio ** 2 +  # 2nd harmonic
+            distortion_amount * 0.3 * audio ** 3  # 3rd harmonic
+        )
+
+        # Add slight resonance at common formant frequencies (500Hz, 1500Hz, 2500Hz)
+        resonance_strength = random.uniform(0.01, 0.04)
+        for freq in [500, 1500, 2500]:
+            if random.random() < 0.5:  # Randomly apply each resonance
+                # Create narrow bandpass at formant frequency
+                bw = 100  # Bandwidth
+                low = max(freq - bw/2, 100)
+                high = min(freq + bw/2, self.config.HIGH_FREQ)
+                b_res, a_res = signal.butter(2, [low, high], btype='band', fs=self.config.SAMPLE_RATE)
+                resonant = signal.filtfilt(b_res, a_res, audio)
+                harmonics += resonant * resonance_strength
+
+        result = audio + harmonics
+
+        return torch.tensor(np.ascontiguousarray(result), dtype=torch.float32).unsqueeze(0)
+
+    def _apply_agc(self, waveform: torch.Tensor) -> torch.Tensor:
+        """
+        Apply automatic gain control (AGC) compression.
+
+        Phones use AGC to normalize volume levels. This compresses
+        dynamic range with attack/release characteristics.
+        """
+        audio = waveform.numpy().squeeze()
+
+        # AGC parameters
+        attack_time = random.uniform(0.005, 0.02)  # 5-20ms attack
+        release_time = random.uniform(0.05, 0.2)   # 50-200ms release
+        target_level = random.uniform(0.3, 0.5)
+        ratio = random.uniform(2.0, 4.0)           # Compression ratio 2:1 to 4:1
+
+        # Convert times to coefficients
+        attack_coef = np.exp(-1.0 / (attack_time * self.config.SAMPLE_RATE))
+        release_coef = np.exp(-1.0 / (release_time * self.config.SAMPLE_RATE))
+
+        # Process sample by sample
+        envelope = 0.0
+        result = np.zeros_like(audio)
+
+        for i in range(len(audio)):
+            input_level = abs(audio[i])
+
+            # Envelope follower with attack/release
+            if input_level > envelope:
+                envelope = attack_coef * envelope + (1 - attack_coef) * input_level
+            else:
+                envelope = release_coef * envelope + (1 - release_coef) * input_level
+
+            # Compute gain based on compression ratio
+            if envelope > target_level:
+                gain = target_level + (envelope - target_level) / ratio
+                gain = gain / (envelope + 1e-10)
+            else:
+                gain = 1.0
+
+            result[i] = audio[i] * gain
+
+        return torch.tensor(np.ascontiguousarray(result), dtype=torch.float32).unsqueeze(0)
+
+    def _apply_clipping(self, waveform: torch.Tensor) -> torch.Tensor:
+        """
+        Apply soft clipping for microphone saturation on loud sounds.
+
+        Uses tanh for smooth saturation curve, simulating analog limiting.
+        """
+        threshold = random.uniform(0.7, 0.9)
+
+        # Soft clip using tanh (smooth saturation)
+        clipped = torch.tanh(waveform / threshold) * threshold
+
+        return clipped
+
     def _add_noise(self, waveform: torch.Tensor) -> torch.Tensor:
         """Add realistic phone call background noise."""
         audio = waveform.numpy().squeeze()
@@ -176,32 +336,154 @@ class PhoneDegradation:
 
         return torch.tensor(audio + noise, dtype=torch.float32).unsqueeze(0)
 
-    def _simulate_packet_loss(self, waveform: torch.Tensor) -> torch.Tensor:
-        """Simulate VoIP packet loss (audio dropouts)."""
+    def _simulate_burst_packet_loss(self, waveform: torch.Tensor) -> torch.Tensor:
+        """
+        Simulate VoIP packet loss with Markov model for bursty behavior.
+
+        Real packet loss is bursty - when one packet is lost, the next
+        is more likely to be lost too. This creates realistic dropout patterns.
+        """
         audio = waveform.numpy().squeeze()
 
         # Packet size (~20ms)
         packet_size = int(0.02 * self.config.SAMPLE_RATE)
         num_packets = len(audio) // packet_size
 
-        # Lose 1-5% of packets
-        loss_rate = random.uniform(0.01, 0.05)
+        # Markov model probabilities
+        # P(loss | no_loss) - probability to start losing
+        p_loss_start = random.uniform(0.01, 0.03)
+        # P(loss | loss) - probability to continue losing (creates bursts)
+        p_loss_continue = random.uniform(0.2, 0.4)
+
+        in_loss_state = False
 
         for i in range(num_packets):
-            if random.random() < loss_rate:
+            # Markov state transition
+            if in_loss_state:
+                if random.random() >= p_loss_continue:
+                    in_loss_state = False
+            else:
+                if random.random() < p_loss_start:
+                    in_loss_state = True
+
+            if in_loss_state:
                 start = i * packet_size
                 end = start + packet_size
 
-                # Replace with silence or interpolation
-                if random.random() < 0.5:
-                    audio[start:end] = 0  # Silence
-                else:
-                    # Simple interpolation (packet loss concealment)
-                    if i > 0:
-                        prev_end = audio[start-10:start].mean() if start >= 10 else 0
-                        audio[start:end] = np.linspace(prev_end, 0, packet_size)
+                # Packet loss concealment strategies
+                strategy = random.choice(['silence', 'interpolate', 'repeat'])
 
-        return torch.tensor(audio, dtype=torch.float32).unsqueeze(0)
+                if strategy == 'silence':
+                    audio[start:end] = 0
+                elif strategy == 'interpolate' and i > 0:
+                    # Linear interpolation from previous packet
+                    prev_end_val = audio[start-1] if start > 0 else 0
+                    next_start_val = audio[end] if end < len(audio) else 0
+                    audio[start:end] = np.linspace(prev_end_val, next_start_val, packet_size)
+                elif strategy == 'repeat' and i > 0:
+                    # Repeat previous packet (common concealment)
+                    prev_start = (i - 1) * packet_size
+                    audio[start:end] = audio[prev_start:start]
+
+        return torch.tensor(np.ascontiguousarray(audio), dtype=torch.float32).unsqueeze(0)
+
+    def _apply_jitter(self, waveform: torch.Tensor) -> torch.Tensor:
+        """
+        Add timing jitter (sample-level timing variations).
+
+        VoIP calls have variable packet arrival times, causing
+        slight timing inconsistencies in the audio playback.
+        """
+        audio = waveform.numpy().squeeze()
+
+        # Packet size (~20ms)
+        packet_size = int(0.02 * self.config.SAMPLE_RATE)
+        num_packets = len(audio) // packet_size
+
+        # Maximum jitter in samples (0-50ms)
+        max_jitter_ms = random.uniform(10, 50)
+        max_jitter_samples = int(max_jitter_ms * self.config.SAMPLE_RATE / 1000)
+
+        result = np.zeros_like(audio)
+        write_pos = 0
+
+        for i in range(num_packets):
+            start = i * packet_size
+            end = min(start + packet_size, len(audio))
+            packet = audio[start:end]
+
+            # Random delay for this packet
+            jitter = random.randint(0, max_jitter_samples)
+
+            # Calculate write position with jitter
+            write_start = write_pos
+            write_end = min(write_start + len(packet), len(result))
+
+            # Copy packet to result (may overlap or have gaps)
+            actual_len = write_end - write_start
+            if actual_len > 0:
+                result[write_start:write_end] = packet[:actual_len]
+
+            # Advance write position (with some jitter variation)
+            write_pos += len(packet) + random.randint(-jitter // 2, jitter // 2)
+            write_pos = max(0, min(write_pos, len(result) - packet_size))
+
+        return torch.tensor(np.ascontiguousarray(result), dtype=torch.float32).unsqueeze(0)
+
+    def _simulate_vad_dtx(self, waveform: torch.Tensor) -> torch.Tensor:
+        """
+        Simulate Voice Activity Detection (VAD) and Discontinuous Transmission (DTX).
+
+        Real phone codecs:
+        - Clip speech onsets due to VAD detection delay (10-30ms)
+        - Insert comfort noise during silence (instead of true silence)
+        """
+        audio = waveform.numpy().squeeze()
+
+        # Frame size for VAD processing (~20ms)
+        frame_size = int(0.02 * self.config.SAMPLE_RATE)
+        num_frames = len(audio) // frame_size
+
+        # Energy threshold for VAD
+        energy_threshold = random.uniform(0.005, 0.02)
+
+        # VAD delay in samples (10-30ms)
+        vad_delay_ms = random.uniform(10, 30)
+        vad_delay_samples = int(vad_delay_ms * self.config.SAMPLE_RATE / 1000)
+
+        # Comfort noise level (very low)
+        comfort_noise_level = random.uniform(0.001, 0.004)
+
+        result = audio.copy()
+        was_silent = True
+
+        for i in range(num_frames):
+            start = i * frame_size
+            end = start + frame_size
+            frame = audio[start:end]
+
+            # Calculate frame energy (RMS)
+            energy = np.sqrt(np.mean(frame ** 2))
+
+            is_silent = energy < energy_threshold
+
+            if is_silent:
+                # Replace silence with comfort noise
+                comfort_noise = np.random.randn(frame_size) * comfort_noise_level
+                result[start:end] = comfort_noise
+                was_silent = True
+            else:
+                if was_silent:
+                    # Transition from silence to speech - clip onset
+                    clip_end = min(start + vad_delay_samples, end)
+                    # Gradually fade in over the VAD delay period
+                    fade_length = clip_end - start
+                    if fade_length > 0:
+                        fade_in = np.linspace(0, 1, fade_length)
+                        result[start:clip_end] = result[start:clip_end] * fade_in
+                was_silent = False
+
+        return torch.tensor(np.ascontiguousarray(result), dtype=torch.float32).unsqueeze(0)
 
     def _add_echo(self, waveform: torch.Tensor) -> torch.Tensor:
         """Add telephone echo/reverb."""
