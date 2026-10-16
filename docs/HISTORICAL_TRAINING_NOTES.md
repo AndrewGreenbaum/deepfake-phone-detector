@@ -30,4 +30,3 @@ Following [Richard Sutton's Bitter Lesson](http://www.incompleteideas.net/Incsig
 | Training Accuracy | 99.98% |
 | Model Size | 1.69 MB |
 | Inference Time | ~40ms |
-
