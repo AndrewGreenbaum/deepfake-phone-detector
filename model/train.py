@@ -52,6 +52,9 @@ def compute_class_weights(train_loader: DataLoader, device: torch.device) -> tor
         for label in labels:
             class_counts[label] += 1
 
+    if (class_counts == 0).any():
+        raise ValueError("Class weighting requires samples from both real and fake classes.")
+
     # Inverse frequency weighting
     total = class_counts.sum()
     weights = total / (2 * class_counts)
@@ -63,7 +66,7 @@ def compute_class_weights(train_loader: DataLoader, device: torch.device) -> tor
 
 
 class Trainer:
-    """Training manager for phone deepfake detector with all best practices."""
+    """Train and validate a detector, recording metrics and checkpoints."""
 
     def __init__(
         self,
@@ -79,6 +82,12 @@ class Trainer:
         warmup_epochs: int = 5,
         class_weights: torch.Tensor = None
     ):
+        if grad_accum_steps < 1:
+            raise ValueError("grad_accum_steps must be at least 1")
+        if warmup_epochs < 0:
+            raise ValueError("warmup_epochs must be nonnegative")
+        if len(train_loader) == 0 or len(val_loader) == 0:
+            raise ValueError("Training and validation loaders must be nonempty")
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -100,7 +109,7 @@ class Trainer:
             self.optimizer, T_max=50, eta_min=1e-6
         )
 
-        self.best_val_acc = 0.0
+        self.best_val_acc = float('-inf')
         self.history = {
             'train_loss': [], 'train_acc': [],
             'val_loss': [], 'val_acc': [],
@@ -123,7 +132,7 @@ class Trainer:
 
     def _get_lr_scale(self, epoch: int) -> float:
         """Get learning rate scale for warmup."""
-        if epoch <= self.warmup_epochs:
+        if self.warmup_epochs and epoch <= self.warmup_epochs:
             return epoch / self.warmup_epochs
         return 1.0
 
@@ -142,21 +151,26 @@ class Trainer:
 
         for batch_idx, (inputs, labels) in enumerate(pbar):
             inputs, labels = inputs.to(self.device), labels.to(self.device)
+            group_start = (batch_idx // self.grad_accum_steps) * self.grad_accum_steps
+            group_size = min(self.grad_accum_steps, len(self.train_loader) - group_start)
 
             # Forward pass with optional AMP
             if self.use_amp:
                 with autocast():
                     outputs = self.model(inputs)
-                    loss = self.criterion(outputs, labels) / self.grad_accum_steps
+                    batch_loss = self.criterion(outputs, labels)
+                    loss = batch_loss / group_size
 
                 self.scaler.scale(loss).backward()
             else:
                 outputs = self.model(inputs)
-                loss = self.criterion(outputs, labels) / self.grad_accum_steps
+                batch_loss = self.criterion(outputs, labels)
+                loss = batch_loss / group_size
                 loss.backward()
 
             # Gradient accumulation
-            if (batch_idx + 1) % self.grad_accum_steps == 0:
+            if ((batch_idx + 1) % self.grad_accum_steps == 0
+                    or batch_idx + 1 == len(self.train_loader)):
                 if self.use_amp:
                     self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
@@ -168,13 +182,13 @@ class Trainer:
 
                 self.optimizer.zero_grad()
 
-            total_loss += loss.item() * self.grad_accum_steps
+            total_loss += batch_loss.item()
             _, predicted = outputs.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
 
             pbar.set_postfix({
-                'loss': f'{loss.item() * self.grad_accum_steps:.4f}',
+                'loss': f'{batch_loss.item():.4f}',
                 'acc': f'{100.*correct/total:.1f}%'
             })
 
@@ -221,6 +235,8 @@ class Trainer:
         Returns:
             True if training completed, False if early stopped
         """
+        if epochs < 1 or patience < 1:
+            raise ValueError("epochs and patience must be at least 1")
         os.makedirs(save_dir, exist_ok=True)
 
         # Store initial LR for warmup
