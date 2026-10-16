@@ -38,8 +38,14 @@ def preprocess_audio(audio_path: str, config: PhoneConfig, degrader: PhoneDegrad
     # Convert to tensor with shape (1, samples)
     waveform = torch.tensor(audio_np.copy(), dtype=torch.float32).unsqueeze(0)
 
-    # Apply phone degradation (handles resampling to 8kHz internally)
-    degraded = degrader(waveform, sr)
+    # Match nonaugmented evaluation: fixed filtering and duration before mel.
+    degraded = degrader(waveform, sr, augment=False)
+    if degraded.shape[-1] < config.NUM_SAMPLES:
+        degraded = torch.nn.functional.pad(
+            degraded, (0, config.NUM_SAMPLES - degraded.shape[-1])
+        )
+    else:
+        degraded = degraded[..., :config.NUM_SAMPLES]
 
     return degraded.squeeze(0)
 
@@ -54,6 +60,8 @@ def detect_deepfake(
     threshold: float = 0.5
 ) -> dict:
     """Run deepfake detection on a single audio file."""
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError("threshold must be between 0 and 1")
 
     # Preprocess
     waveform = preprocess_audio(audio_path, config, degrader)
@@ -91,7 +99,7 @@ def detect_deepfake(
     return {
         'file': audio_path,
         'prediction': prediction,
-        'confidence': max(real_prob, fake_prob),
+        'confidence': fake_prob if prediction == 'FAKE' else real_prob,
         'real_probability': real_prob,
         'fake_probability': fake_prob,
         'threshold': threshold

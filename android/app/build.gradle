@@ -31,6 +31,10 @@ android {
         jvmTarget = '17'
     }
 
+    testOptions {
+        unitTests.includeAndroidResources = true
+    }
+
     buildFeatures {
         viewBinding true
     }
@@ -51,6 +55,8 @@ dependencies {
     implementation 'org.tensorflow:tensorflow-lite:2.14.0'
     implementation 'org.tensorflow:tensorflow-lite-support:0.4.4'
 
-    // Audio processing
-    implementation 'com.github.nicoulaj:ffts-android:1.0.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.2'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.11.1'
 }
