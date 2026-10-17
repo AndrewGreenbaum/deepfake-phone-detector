@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Deepfake Detector</string>
+    <string name="app_name">Synthetic Speech Detection Prototype</string>
     <string name="start_detection">Start Detection</string>
     <string name="stop_detection">Stop Detection</string>
     <string name="status_idle">Tap to start monitoring</string>
