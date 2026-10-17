@@ -6,6 +6,11 @@ Uses torchaudio's built-in VCTK_092 dataset loader.
 import argparse
 import shutil
 from pathlib import Path
+
+try:
+    from .archive_safety import extract_zip
+except ImportError:  # Direct script invocation
+    from archive_safety import extract_zip
 from tqdm import tqdm
 import soundfile as sf
 
@@ -92,9 +97,8 @@ def prepare_vctk_from_zip(zip_path: str, output_dir: str, max_samples: int = Non
             members = members[:max_samples]
             print(f"Limiting to {max_samples} samples")
 
-        for member in tqdm(members, desc="Extracting VCTK"):
-            # Extract to temp location
-            zf.extract(member, extract_dir)
+        extract_zip(zf, extract_dir, members)
+        for member in tqdm(members, desc="Preparing VCTK"):
 
             # Get the extracted file path
             src = extract_dir / member

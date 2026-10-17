@@ -5,6 +5,11 @@ Extract and organize ASVspoof 2019 LA dataset.
 import os
 import shutil
 from pathlib import Path
+
+try:
+    from .archive_safety import extract_zip
+except ImportError:  # Direct script invocation
+    from archive_safety import extract_zip
 import zipfile
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -17,7 +22,7 @@ def extract_asvspoof(zip_path: str):
     extract_dir = DATA_DIR / "downloads" / "LA"
 
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(DATA_DIR / "downloads")
+        extract_zip(zip_ref, DATA_DIR / "downloads")
 
     print(f"Extracted to {extract_dir}")
     return extract_dir

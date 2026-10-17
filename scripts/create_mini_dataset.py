@@ -13,6 +13,11 @@ import random
 import urllib.request
 import tarfile
 from pathlib import Path
+
+try:
+    from .archive_safety import extract_tar
+except ImportError:  # Direct script invocation
+    from archive_safety import extract_tar
 from tqdm import tqdm
 
 # Add model path
@@ -85,7 +90,7 @@ def download_ljspeech_samples(output_dir: Path, num_samples: int = 200):
 
         print("Extracting LJSpeech...")
         with tarfile.open(tar_path, "r:bz2") as tar:
-            tar.extractall(output_dir.parent)
+            extract_tar(tar, output_dir.parent)
         print("  Extraction complete!")
 
         # Clean up tar file

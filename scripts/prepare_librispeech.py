@@ -21,6 +21,11 @@ import argparse
 import tarfile
 import random
 from pathlib import Path
+
+try:
+    from .archive_safety import extract_tar
+except ImportError:  # Direct script invocation
+    from archive_safety import extract_tar
 from typing import Optional
 import shutil
 from tqdm import tqdm
@@ -96,7 +101,7 @@ def extract_tarfile(tar_path: Path, output_dir: Path) -> bool:
     try:
         print(f"Extracting {tar_path.name}...")
         with tarfile.open(tar_path, "r:gz") as tar:
-            tar.extractall(path=output_dir)
+            extract_tar(tar, output_dir)
         return True
     except Exception as e:
         print(f"Extraction failed: {e}")
