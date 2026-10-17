@@ -1,4 +1,4 @@
-# Phone Call Deepfake Detector
+# Synthetic Speech Detection Prototype
 
 A research prototype for classifying real and synthetic speech after narrowing it to telephone bandwidth. It includes a Python training/evaluation pipeline, four PyTorch models, and an Android prototype.
 
