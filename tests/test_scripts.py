@@ -295,8 +295,8 @@ class TestElevenLabsScript:
 
     def test_phrases_lists_populated(self):
         """Test phrase lists have content."""
-        from generate_elevenlabs_samples import SCAM_PHRASES, NORMAL_PHRASES
-        assert len(SCAM_PHRASES) > 0
+        from generate_elevenlabs_samples import DIVERSE_PHRASES, NORMAL_PHRASES
+        assert len(DIVERSE_PHRASES) > 0
         assert len(NORMAL_PHRASES) > 0
 
     def test_models_dict_valid(self):
@@ -366,8 +366,8 @@ class TestElevenLabsScript:
 
     def test_phrases_are_complete_sentences(self):
         """Test that phrases are properly formed sentences."""
-        from generate_elevenlabs_samples import SCAM_PHRASES, NORMAL_PHRASES
-        all_phrases = SCAM_PHRASES + NORMAL_PHRASES
+        from generate_elevenlabs_samples import DIVERSE_PHRASES, NORMAL_PHRASES
+        all_phrases = DIVERSE_PHRASES + NORMAL_PHRASES
         for phrase in all_phrases:
             # Each phrase should end with proper punctuation
             assert phrase[-1] in '.!?', f"Phrase missing punctuation: {phrase}"

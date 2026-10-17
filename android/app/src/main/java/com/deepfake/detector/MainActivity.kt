@@ -75,12 +75,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindAudioService() {
         Intent(this, AudioAnalysisService::class.java).also { intent ->
-            startService(intent)
             bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         }
     }
 
     private fun observeService() {
+        lifecycleScope.launch {
+            audioService?.errorMessage?.collectLatest { error ->
+                if (error != null) {
+                    updateUI(isRecording = false, result = null)
+                    binding.statusText.text = error
+                }
+            }
+        }
         lifecycleScope.launch {
             audioService?.isRecording?.collectLatest { isRecording ->
                 updateUI(isRecording, audioService?.currentResult?.value)
@@ -104,6 +111,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkPermissionsAndStart() {
+        if (audioService?.isReady != true) {
+            binding.statusText.text = audioService?.errorMessage?.value
+                ?: "Detector is still loading. Try again in a moment."
+            return
+        }
         val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -122,8 +134,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startDetection() {
-        audioService?.startRecording()
-        updateUI(isRecording = true, result = null)
+        if (audioService?.isReady != true) {
+            binding.statusText.text = audioService?.errorMessage?.value ?: "Detector is not ready."
+            return
+        }
+        ContextCompat.startForegroundService(this, Intent(this, AudioAnalysisService::class.java))
     }
 
     private fun stopDetection() {
@@ -141,7 +156,7 @@ class MainActivity : AppCompatActivity() {
         binding.statusText.text = when {
             isRecording && result == null -> getString(R.string.status_listening)
             isRecording -> getString(R.string.status_analyzing)
-            else -> getString(R.string.status_idle)
+            else -> audioService?.errorMessage?.value ?: getString(R.string.status_idle)
         }
 
         if (!isRecording) {

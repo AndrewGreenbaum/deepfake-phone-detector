@@ -24,13 +24,18 @@ class AudioAnalysisService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "deepfake_detection"
         private const val SAMPLE_RATE = 8000
-        private const val CHUNK_DURATION_MS = 1500  // 1.5 second chunks
+        private const val CHUNK_DURATION_MS = 3000  // Match the Python training window
         private const val CHUNK_SIZE = SAMPLE_RATE * CHUNK_DURATION_MS / 1000
     }
+
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage
+    val isReady: Boolean get() = classifier != null
 
     private val binder = LocalBinder()
     private var audioRecord: AudioRecord? = null
     private var classifier: DeepfakeClassifier? = null
+    private val classifierLock = Any()
     private var analysisJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -52,81 +57,102 @@ class AudioAnalysisService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        classifier = DeepfakeClassifier(this)
+        try {
+            classifier = DeepfakeClassifier(this)
+        } catch (e: Exception) {
+            _errorMessage.value = "Detector unavailable: add a compatible trained model.tflite " +
+                "to app/src/main/assets and rebuild. ${e.message ?: "Model could not be loaded."}"
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = createNotification()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
-
-        return START_STICKY
+        if (!startRecording()) stopSelf()
+        return START_NOT_STICKY
     }
 
-    fun startRecording() {
-        if (_isRecording.value) return
+    private fun startRecording(): Boolean {
+        if (_isRecording.value) return true
+        if (!isReady) return false
+        _errorMessage.value = null
+        try {
+            val notification = createNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            val bufferSize = AudioRecord.getMinBufferSize(
+                SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+            )
+            check(bufferSize > 0) { "This device does not support 8 kHz microphone recording." }
+            val recorder = AudioRecord(
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION, SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                maxOf(bufferSize, CHUNK_SIZE * 2)
+            )
+            audioRecord = recorder
+            check(recorder.state == AudioRecord.STATE_INITIALIZED) { "Microphone could not be initialized." }
+            recorder.startRecording()
+            check(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "Microphone did not start." }
+            _isRecording.value = true
 
-        val bufferSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        )
-
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(bufferSize, CHUNK_SIZE * 2)
-        )
-
-        audioRecord?.startRecording()
-        _isRecording.value = true
-
-        analysisJob = scope.launch {
-            val buffer = ShortArray(CHUNK_SIZE)
-            val floatBuffer = FloatArray(CHUNK_SIZE)
-
-            while (isActive && _isRecording.value) {
-                val read = audioRecord?.read(buffer, 0, CHUNK_SIZE) ?: 0
-
-                if (read > 0) {
-                    // Convert to float and normalize
-                    var maxAmp = 0f
-                    for (i in 0 until read) {
-                        floatBuffer[i] = buffer[i] / 32768f
-                        maxAmp = maxOf(maxAmp, kotlin.math.abs(floatBuffer[i]))
-                    }
-                    _audioLevel.value = maxAmp
-
-                    // Run detection if audio level is sufficient
-                    if (maxAmp > 0.01f) {
-                        try {
-                            val result = classifier?.analyze(floatBuffer)
-                            result?.let { _currentResult.value = it }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
+            analysisJob = scope.launch {
+                val buffer = ShortArray(CHUNK_SIZE)
+                var filled = 0
+                try {
+                    while (isActive && _isRecording.value) {
+                        val read = recorder.read(buffer, filled, CHUNK_SIZE - filled)
+                        check(read >= 0) { "Microphone read failed ($read)." }
+                        if (read == 0) {
+                            delay(10)
+                            continue
                         }
+                        filled += read
+                        if (filled < CHUNK_SIZE) continue
+                        val samples = FloatArray(CHUNK_SIZE) { buffer[it] / 32768f }
+                        val level = samples.maxOf { kotlin.math.abs(it) }
+                        _audioLevel.value = level
+                        if (level > 0.01f) {
+                            val result = synchronized(classifierLock) {
+                                if (isActive && _isRecording.value) classifier?.analyze(samples) else null
+                            }
+                            if (isActive && _isRecording.value) _currentResult.value = result
+                        }
+                        filled = 0
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (isActive && _isRecording.value) {
+                        _errorMessage.value = "Detection stopped: ${e.message}"
+                        withContext(Dispatchers.Main) { stopRecording() }
                     }
                 }
-
-                delay(100)  // Small delay between chunks
             }
+            return true
+        } catch (e: Exception) {
+            _errorMessage.value = "Unable to start microphone: ${e.message}"
+            stopRecording()
+            return false
         }
     }
 
     fun stopRecording() {
         _isRecording.value = false
         analysisJob?.cancel()
-        audioRecord?.stop()
-        audioRecord?.release()
+        analysisJob = null
+        audioRecord?.let { recorder ->
+            try {
+                if (recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) recorder.stop()
+            } finally {
+                recorder.release()
+            }
+        }
         audioRecord = null
         _currentResult.value = null
         _audioLevel.value = 0f
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun createNotificationChannel() {
@@ -164,8 +190,11 @@ class AudioAnalysisService : Service() {
 
     override fun onDestroy() {
         stopRecording()
-        classifier?.close()
         scope.cancel()
+        synchronized(classifierLock) {
+            classifier?.close()
+            classifier = null
+        }
         super.onDestroy()
     }
 }

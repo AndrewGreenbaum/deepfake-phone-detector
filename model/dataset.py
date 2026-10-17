@@ -4,6 +4,7 @@ Handles 8kHz audio with phone degradation augmentation.
 """
 
 import os
+import copy
 import torch
 import torchaudio
 import soundfile as sf
@@ -191,7 +192,7 @@ class PhoneAudioDataset(Dataset):
 
             # Apply phone degradation (includes resampling to 8kHz)
             if self.degrader and self.apply_degradation:
-                waveform = self.degrader(waveform, sr)
+                waveform = self.degrader(waveform, sr, augment=self.augment)
             elif sr != self.config.SAMPLE_RATE:
                 # Just resample if no degradation
                 waveform = torchaudio.functional.resample(
@@ -326,8 +327,11 @@ def create_dataloaders(
         full_dataset, [train_size, val_size, test_size]
     )
 
-    # Disable augmentation for val/test
-    # (Note: this is a simplification - ideally use separate dataset instances)
+    # Keep the exact sample/index mapping, but do not randomize evaluation.
+    evaluation_dataset = copy.copy(full_dataset)
+    evaluation_dataset.augment = False
+    val_set.dataset = evaluation_dataset
+    test_set.dataset = evaluation_dataset
 
     train_loader = DataLoader(
         train_set,
