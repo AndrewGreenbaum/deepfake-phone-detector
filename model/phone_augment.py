@@ -44,8 +44,8 @@ class PhoneDegradation:
     """
     Transforms clean audio into phone-quality audio.
 
-    This is the key innovation - we train on audio that sounds
-    like actual phone calls, not studio recordings.
+    Band-limits audio and optionally adds randomized training effects.
+    The effects approximate telephony artifacts; they are not a real codec.
     """
 
     def __init__(
@@ -91,8 +91,9 @@ class PhoneDegradation:
             fs=config.SAMPLE_RATE
         )
 
-    def __call__(self, waveform: torch.Tensor, sample_rate: int) -> torch.Tensor:
-        """Apply full phone degradation pipeline."""
+    def __call__(self, waveform: torch.Tensor, sample_rate: int,
+                 augment: bool = True) -> torch.Tensor:
+        """Apply phone filtering, with random effects only when augmenting."""
 
         # 1. Resample to phone rate (8kHz)
         if sample_rate != self.config.SAMPLE_RATE:
@@ -102,6 +103,9 @@ class PhoneDegradation:
 
         # 2. Apply telephone bandpass filter
         waveform = self._apply_bandpass(waveform)
+
+        if not augment:
+            return self._normalize(waveform)
 
         # 3. Apply spectral smoothing (codec-style high-freq loss)
         if random.random() < self.spectral_smoothing_prob:

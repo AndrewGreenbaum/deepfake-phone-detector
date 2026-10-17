@@ -4,12 +4,24 @@ Export trained model to TensorFlow Lite for Android deployment.
 
 import argparse
 import os
+from pathlib import Path
 import torch
 import numpy as np
-import tensorflow as tf
 
 from model import get_model
 from phone_augment import PhoneConfig
+
+
+def _tensorflow():
+    """Keep TensorFlow optional for training and export utilities."""
+    try:
+        import tensorflow as tf
+    except ImportError as exc:
+        raise RuntimeError(
+            "TFLite conversion requires TensorFlow and onnx-tf in a compatible "
+            "export environment. Core training does not install these packages."
+        ) from exc
+    return tf
 
 
 def export_to_tflite(
@@ -20,6 +32,21 @@ def export_to_tflite(
 ):
     """Export PyTorch model to TFLite."""
 
+    output = Path(output_path)
+    if output.suffix != '.tflite':
+        raise ValueError("Output path must end in .tflite")
+    if not Path(checkpoint_path).is_file():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+    tf = _tensorflow()
+    try:
+        import onnx
+        from onnx_tf.backend import prepare
+    except ImportError as exc:
+        raise RuntimeError(
+            "TFLite conversion requires onnx and onnx-tf compatible with the "
+            "installed TensorFlow version. The conversion path is experimental."
+        ) from exc
+    output.parent.mkdir(parents=True, exist_ok=True)
     config = PhoneConfig()
 
     # Load PyTorch model
@@ -35,7 +62,7 @@ def export_to_tflite(
     dummy_input = torch.randn(*input_shape)
 
     # Export to ONNX first
-    onnx_path = output_path.replace('.tflite', '.onnx')
+    onnx_path = str(output.with_suffix('.onnx'))
     print(f"Exporting to ONNX: {onnx_path}")
 
     torch.onnx.export(
@@ -52,15 +79,11 @@ def export_to_tflite(
     # Convert ONNX to TFLite
     print("Converting to TFLite...")
 
-    # Use tf-onnx for conversion
-    import onnx
-    from onnx_tf.backend import prepare
-
     onnx_model = onnx.load(onnx_path)
     tf_rep = prepare(onnx_model)
 
     # Save as SavedModel
-    saved_model_dir = output_path.replace('.tflite', '_saved_model')
+    saved_model_dir = str(output.with_name(output.stem + '_saved_model'))
     tf_rep.export_graph(saved_model_dir)
 
     # Convert to TFLite
@@ -87,6 +110,7 @@ def export_to_tflite(
 
 def test_tflite(tflite_path: str, input_shape: tuple):
     """Test TFLite model inference."""
+    tf = _tensorflow()
     print("\nTesting TFLite model...")
 
     interpreter = tf.lite.Interpreter(model_path=tflite_path)
@@ -112,6 +136,7 @@ def test_tflite(tflite_path: str, input_shape: tuple):
 
 def create_labels_file(output_dir: str):
     """Create labels file for Android."""
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     labels = ["real", "fake"]
     labels_path = os.path.join(output_dir, "labels.txt")
 
@@ -130,16 +155,17 @@ def main():
     parser.add_argument("--no-quantize", action="store_true")
     args = parser.parse_args()
 
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    try:
+        export_to_tflite(
+            args.checkpoint,
+            args.model,
+            args.output,
+            quantize=not args.no_quantize
+        )
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        parser.exit(1, f"Export failed: {exc}\n")
 
-    export_to_tflite(
-        args.checkpoint,
-        args.model,
-        args.output,
-        quantize=not args.no_quantize
-    )
-
-    create_labels_file(os.path.dirname(args.output))
+    create_labels_file(str(Path(args.output).parent))
     print("\nExport complete!")
 
 

@@ -1,172 +1,82 @@
 # Phone Call Deepfake Detector
 
-Real-time AI voice detection optimized for **phone call quality audio**. Unlike most detectors that fail on telephony audio, this one is built specifically for the compression, noise, and limited bandwidth of actual phone calls.
+A research prototype for classifying real and synthetic speech after narrowing it to telephone bandwidth. It includes a Python training/evaluation pipeline, four PyTorch models, and an Android prototype.
 
-## Why This Exists
+No trained checkpoint or TFLite model is included. Accuracy, latency, and live-call detection have not been validated from this checkout. Historical experiment notes are retained in [docs/HISTORICAL_TRAINING_NOTES.md](docs/HISTORICAL_TRAINING_NOTES.md).
 
-Most voice cloning scams happen over phone calls, but most AI detectors are trained on clean studio audio. Phone calls have:
-- **8kHz sample rate** (vs 44kHz normal audio)
-- **Narrow frequency band** (300Hz - 3.4kHz)
-- **Heavy compression** (GSM, AMR codecs)
-- **Noise, echo, packet loss**
+## Python setup
 
-This detector is trained on phone-degraded audio to catch deepfakes where they actually happen.
+Use Python 3.12 in a virtual environment:
 
-## Features
-
-- **Phone-optimized model** - Trained on 8kHz, codec-compressed audio
-- **Real-time detection** - Works during live phone calls
-- **On-device processing** - No data leaves your phone
-- **Low latency** - Results in <200ms
-- **4 model architectures** - From lightweight mobile to full attention-based
-
-## Architecture
-
-```
-Phone Call (8kHz)
-      |
-      v
-+------------------+
-| Noise Reduction  |
-+--------+---------+
-         |
-         v
-+------------------+
-| Mel Spectrogram  |  64 bands, phone frequency range
-+--------+---------+
-         |
-         v
-+------------------+
-| Lightweight CNN  |  Optimized for mobile
-+--------+---------+
-         |
-         v
-   REAL / FAKE + confidence %
-```
-
-## Phone Degradation Pipeline
-
-Training data is created by degrading clean audio to simulate phone calls:
-
-```python
-clean_audio
-    -> Resample to 8kHz
-    -> Apply GSM codec simulation
-    -> Bandpass filter (300Hz - 3.4kHz)
-    -> Add background noise (SNR 10-30dB)
-    -> Simulate packet loss (0-5%)
-    -> Add echo/reverb
-```
-
-## Quick Start
-
-### 1. Setup Environment
 ```bash
-cd deepfake-phone-detector
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pytest -q tests
 ```
 
-### 2. Prepare Dataset
+Tests use generated audio and model weights; TTS API calls are mocked. ONNX tests require `onnxscript`, included in the requirements. TensorFlow is not needed for training or the core tests.
+
+## Prepare data and train
+
+Arrange labeled audio as `data/raw/real/` and `data/raw/fake/`. Fake samples can also be grouped by TTS system, for example `data/raw/fake/elevenlabs/`. Dataset preparation scripts live in `scripts/`; `download_dataset.py` provides setup instructions.
+
 ```bash
-# Setup directories and get instructions
-python scripts/download_dataset.py
-
-# If using ASVspoof dataset:
-python scripts/prepare_asvspoof.py --zip data/downloads/LA.zip
-
-# Apply phone degradation
-python scripts/degrade_to_phone.py --input data/raw --output data/phone
+python model/train.py --data data/raw --epochs 50 --model mobile
+python scripts/test_detection.py audio.wav --checkpoint checkpoints/best_model.pt --model mobile
 ```
 
-### 3. Train Model
+Training writes `best_model.pt`, `final_model.pt`, and `history.json` under `checkpoints/` by default, plus TensorBoard logs under `runs/`. Set `--save-dir` and `--log-dir` to change these locations.
+
+Training applies random phone-like effects and crops. Validation, test, and file inference use fixed resampling, filtering, normalization, and the first 3 seconds (zero-padded when shorter). The filter effects approximate telephony artifacts; they do not implement GSM or AMR codecs.
+
+For audio already processed by `scripts/degrade_to_phone.py`, pass `--no-degrade` during training to avoid applying the degradation again. Evaluation scores from small or source-overlapping splits do not establish performance on unseen speakers or voice generators.
+
+## Models and audio representation
+
+Available model names are `phone_cnn`, `temporal`, `mobile`, and `attention`. Compare their results on the same held-out dataset before choosing one; this repository does not establish a best architecture.
+
+The Python pipeline uses 8 kHz mono audio, a 300–3400 Hz bandpass, 3-second windows, 64 mel bands, a 512-point FFT, and a 256-sample hop. The models receive tensors shaped `(batch, 1, 64, 94)` and return two logits: real and fake. Softmax scores are not calibrated guarantees of authenticity.
+
+## Export and Android status
+
+`model/export_tflite.py` contains an experimental PyTorch → ONNX → TensorFlow → TFLite path. It needs a separately configured, compatible TensorFlow/onnx-tf environment; installing the core requirements is insufficient. The script reports missing dependencies and checkpoints before writing export files.
+
 ```bash
-python model/train.py --data data/phone --epochs 50 --model mobile
+python model/export_tflite.py --checkpoint checkpoints/best_model.pt --model mobile --output exported/model.tflite
 ```
 
-### 4. Test Detection
-```bash
-python scripts/test_detection.py audio.wav --checkpoint checkpoints/best.pt --model mobile
-```
+A successful ONNX export does not verify TFLite conversion or trained-model inference. Android preprocessing is checked against Python-generated synthetic fixtures for filtering, normalization, windowing, mel power, and decibel scaling. The classifier requires float32 input `[1, 1, 64, 94]` and float32 output `[1, 2]`; incompatible models produce an explanation instead of starting detection.
 
-### 5. Export for Mobile
-```bash
-python model/export_tflite.py --checkpoint checkpoints/best.pt --output android/app/src/main/assets/model.tflite
-```
+The Android prototype captures microphone audio; it does not implement direct access to both sides of a phone call. It expects `android/app/src/main/assets/model.tflite`, which is absent. Without that asset, the app reports how to supply a model and leaves recording off. Microphone permission and the Start action are required before recording.
 
-### 6. Build Android App
+With JDK 17 and Android SDK 34 installed, set `ANDROID_HOME` or the `sdk.dir` entry in an untracked `android/local.properties`, then run:
+
 ```bash
 cd android
-./gradlew assembleDebug
-# APK: android/app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleDebug testDebugUnitTest
 ```
 
-## Project Structure
+The JVM tests cover Python/Kotlin feature parity and missing-model startup with Robolectric. Regenerate the synthetic fixtures with `python scripts/generate_android_feature_fixtures.py` when intentionally changing preprocessing. The debug build and tests have been checked; real-device recording and trained-model inference still need validation.
 
-```
-deepfake-phone-detector/
-├── model/
-│   ├── phone_augment.py    # Phone degradation pipeline (8kHz, GSM, noise)
-│   ├── dataset.py          # PyTorch dataset for phone-quality audio
-│   ├── model.py            # 4 CNN architectures (PhoneCNN, Mobile, Temporal, Attention)
-│   ├── train.py            # Training loop with validation
-│   └── export_tflite.py    # ONNX -> TFLite conversion
-├── android/
-│   ├── app/src/main/
-│   │   ├── java/.../       # Kotlin: MainActivity, AudioService, Classifier
-│   │   └── res/            # UI layouts and resources
-│   └── build.gradle
-├── scripts/
-│   ├── download_dataset.py   # Dataset setup instructions
-│   ├── prepare_asvspoof.py   # ASVspoof dataset extraction
-│   ├── degrade_to_phone.py   # Batch phone degradation
-│   ├── generate_bark_samples.py  # Generate fake samples with Bark TTS
-│   └── test_detection.py     # Inference script
-├── data/                     # Dataset (gitignored)
-│   ├── raw/real/            # Original real voice samples
-│   ├── raw/fake/            # Original AI-generated samples
-│   ├── phone/real/          # Phone-degraded real samples
-│   └── phone/fake/          # Phone-degraded fake samples
-└── requirements.txt
-```
+## Files
 
-## Model Architectures
+| Path | Purpose |
+|------|---------|
+| `model/phone_augment.py` | Phone-band filtering, optional augmentation, mel transform |
+| `model/dataset.py` | Audio loading and train/validation/test splits |
+| `model/model.py` | Four model architectures |
+| `model/train.py` | Training, gradient accumulation, logging, checkpoints |
+| `model/evaluate.py` | Evaluation metrics and plots |
+| `model/export_tflite.py` | Experimental mobile export |
+| `scripts/test_detection.py` | File inference from a saved checkpoint |
+| `scripts/` | Dataset preparation and optional TTS generators |
+| `android/` | Kotlin microphone/classifier prototype |
+| `tests/` | Synthetic unit and regression tests |
 
-| Model | Parameters | Inference | Use Case |
-|-------|-----------|-----------|----------|
-| `phone_cnn` | 30K | 15ms | Ultra-lightweight baseline |
-| `temporal` | 85K | 25ms | Better temporal artifacts |
-| `mobile` | 17K | 10ms | Android deployment |
-| `attention` | 443K | 40ms | Highest accuracy |
+## Dataset references
 
-## Dataset Sources
-
-### Real Voice Samples
-- [ASVspoof 2019/2021](https://www.asvspoof.org/) - bonafide samples
-- [LibriSpeech](https://www.openslr.org/12) - clean speech
-- [VoxCeleb](https://www.robots.ox.ac.uk/~vgg/data/voxceleb/)
-
-### Fake (AI-Generated) Samples
-- [ASVspoof 2019/2021](https://www.asvspoof.org/) - 17 spoofing systems
-- Generate with [Bark TTS](https://github.com/suno-ai/bark) (included script)
-- Generate with [Coqui TTS](https://github.com/coqui-ai/TTS)
-- [ElevenLabs](https://elevenlabs.io) API
-
-## Tech Stack
-
-- **ML**: PyTorch 2.x, torchaudio
-- **Audio Processing**: librosa, scipy, audiomentations
-- **Mobile**: TensorFlow Lite, Kotlin
-- **Phone Simulation**: Custom GSM codec simulation, bandpass filters
-
-## Performance
-
-| Dataset | Accuracy | Precision | Recall | F1 |
-|---------|----------|-----------|--------|-----|
-| ASVspoof (clean) | ~95% | ~94% | ~96% | ~95% |
-| ASVspoof (phone) | ~92% | ~90% | ~93% | ~91% |
-| In-the-wild | ~88% | ~85% | ~90% | ~87% |
+Preparation scripts support datasets such as [ASVspoof](https://www.asvspoof.org/), [LibriSpeech](https://www.openslr.org/12), and LJSpeech, plus generated samples from several TTS systems. Obtain the datasets separately and follow their usage terms.
 
 ## License
 
