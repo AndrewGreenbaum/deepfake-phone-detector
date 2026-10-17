@@ -15,6 +15,11 @@ python -m pip install -r requirements.txt
 python -m pytest -q tests
 ```
 
+Dataset preparation accepts regular files and folders only. TAR and ZIP imports
+reject escaping paths, links, special files, and oversized archives before
+extracting. The limits allow up to one million entries, 2 GiB per file, and
+64 GiB expanded data; prepare larger datasets in separate archives.
+
 Tests use generated audio and model weights; TTS API calls are mocked. ONNX tests require `onnxscript`, included in the requirements. TensorFlow is not needed for training or the core tests.
 
 ## Prepare data and train
