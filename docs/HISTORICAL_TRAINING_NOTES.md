@@ -1,32 +1,12 @@
-# Historical training notes
+# Earlier training experiments
 
-The following notes were present in the repository before the October 2026 repairs. They are retained for context, not as validated performance claims. The checkout has no corresponding checkpoint, split manifest, or evaluation artifacts, and the previous validation loader applied random augmentation. Reproduce the experiment with a held-out dataset before using any of these numbers.
+These results were recorded before the October 2026 repairs. The corresponding checkpoint, split manifest, and evaluation artifacts are absent, and the earlier validation loader applied random augmentation. Treat the numbers as experiment history, not a reproduced benchmark.
 
-## Training Results
+| Recorded dataset | Model | Recorded train accuracy | Recorded validation accuracy |
+|---|---|---|---|
+| 173 samples | `phone_cnn` | 50–58% | 35–65% |
+| 5,072 samples | `attention` | 99.98% | 100% |
 
-### The Bitter Lesson: Scale > Tricks
+The larger run was described as 5,000 real LJSpeech samples and 72 generated fake samples, all reduced to phone bandwidth. The notes listed automatic class balancing, 19 epochs, a single GPU, a 443K-parameter attention model, a 1.69 MB model file, and roughly 40 ms inference. The model file and timing setup were not retained.
 
-Following [Richard Sutton's Bitter Lesson](http://www.incompleteideas.net/IncsightBrief/BriefLatest.html), we prioritized **data scale** over clever feature engineering. The results speak for themselves:
-
-| Dataset Size | Model | Train Acc | Val Acc | Notes |
-|-------------|-------|-----------|---------|-------|
-| 173 samples | phone_cnn | 50-58% | 35-65% | Random guessing |
-| **5,072 samples** | attention | **99.98%** | **100%** | Perfect classification |
-
-**Key insight:** Scaling data 29x (173 → 5,072) transformed the model from random guessing to perfect accuracy. No architecture changes, no hyperparameter tuning - just more data.
-
-### Training Configuration
-- **Model:** Attention (443K params)
-- **Data:** 5,000 real (LJSpeech) + 72 fake (TTS-generated), all phone-degraded
-- **Class weights:** Automatic balancing for 69:1 imbalance
-- **Epochs:** 19 (early stopping at 100% val acc)
-- **Hardware:** Single GPU
-
-### Performance Benchmarks
-
-| Metric | Value |
-|--------|-------|
-| Validation Accuracy | 100.0% |
-| Training Accuracy | 99.98% |
-| Model Size | 1.69 MB |
-| Inference Time | ~40ms |
+The runs used different architectures as well as different dataset sizes, so they do not isolate the effect of adding data. The 69:1 class imbalance and missing split information also prevent a useful comparison with a held-out evaluation. Re-run with saved manifests and separate speakers and generators before drawing an accuracy or latency conclusion.

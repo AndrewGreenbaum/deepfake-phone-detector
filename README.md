@@ -1,87 +1,74 @@
 # Synthetic Speech Detection Prototype
 
-A research prototype for classifying real and synthetic speech after narrowing it to telephone bandwidth. It includes a Python training/evaluation pipeline, four PyTorch models, and an Android prototype.
+A PyTorch experiment for classifying real and synthetic speech after reducing it to telephone bandwidth. The repo includes four models, data preparation and evaluation scripts, and an Android microphone prototype.
 
-No trained checkpoint or TFLite model is included. Accuracy, latency, and live-call detection have not been validated from this checkout. Historical experiment notes are retained in [docs/HISTORICAL_TRAINING_NOTES.md](docs/HISTORICAL_TRAINING_NOTES.md).
+There is no trained checkpoint or TFLite model in the repo. You need to train a model before running file inference or the Android classifier. Earlier results are recorded in [the experiment notes](docs/HISTORICAL_TRAINING_NOTES.md), but the matching artifacts are missing and those results have not been reproduced.
 
 ## Python setup
 
-Use Python 3.12 in a virtual environment:
+Use Python 3.12:
 
-```bash
+```sh
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 python -m pytest -q tests
 ```
 
-Dataset preparation accepts regular files and folders only. TAR and ZIP imports
-reject escaping paths, links, special files, and oversized archives before
-extracting. The limits allow up to one million entries, 2 GiB per file, and
-64 GiB expanded data; prepare larger datasets in separate archives.
+Tests use generated audio and model weights, with TTS calls mocked. ONNX tests use `onnxscript`, included in the requirements. TensorFlow is only needed for the experimental TFLite conversion.
 
-Tests use generated audio and model weights; TTS API calls are mocked. ONNX tests require `onnxscript`, included in the requirements. TensorFlow is not needed for training or the core tests.
+## Train and run inference
 
-## Prepare data and train
+Put labeled audio in `data/raw/real/` and `data/raw/fake/`. Fake samples can be grouped by generator, such as `data/raw/fake/elevenlabs/`. Dataset preparation and optional TTS generation scripts are in `scripts/`; `download_dataset.py` explains how to obtain the supported datasets.
 
-Arrange labeled audio as `data/raw/real/` and `data/raw/fake/`. Fake samples can also be grouped by TTS system, for example `data/raw/fake/elevenlabs/`. Dataset preparation scripts live in `scripts/`; `download_dataset.py` provides setup instructions.
-
-```bash
+```sh
 python model/train.py --data data/raw --epochs 50 --model mobile
 python scripts/test_detection.py audio.wav --checkpoint checkpoints/best_model.pt --model mobile
 ```
 
-Training writes `best_model.pt`, `final_model.pt`, and `history.json` under `checkpoints/` by default, plus TensorBoard logs under `runs/`. Set `--save-dir` and `--log-dir` to change these locations.
+The model choices are `phone_cnn`, `temporal`, `mobile`, and `attention`. Training writes `best_model.pt`, `final_model.pt`, and `history.json` to `checkpoints/`, with TensorBoard logs in `runs/`. Use `--save-dir` and `--log-dir` to change them.
 
-Training applies random phone-like effects and crops. Validation, test, and file inference use fixed resampling, filtering, normalization, and the first 3 seconds (zero-padded when shorter). The filter effects approximate telephony artifacts; they do not implement GSM or AMR codecs.
+Training adds random phone-like effects and crops. Validation and file inference use deterministic preprocessing and the first three seconds, padded if needed. If you already ran `scripts/degrade_to_phone.py`, train with `--no-degrade` to avoid processing the audio twice. The effects approximate telephone audio; they do not implement GSM or AMR codecs.
 
-For audio already processed by `scripts/degrade_to_phone.py`, pass `--no-degrade` during training to avoid applying the degradation again. Evaluation scores from small or source-overlapping splits do not establish performance on unseen speakers or voice generators.
+Keep speakers and voice generators separate between training and evaluation when measuring generalization. Results from a small or overlapping split can be misleading, and softmax scores are not calibrated authenticity probabilities.
 
-## Models and audio representation
+Dataset imports accept regular files and directories. TAR and ZIP extraction rejects paths outside the destination, links, special files, and oversized archives. The limits are one million entries, 2 GiB per file, and 64 GiB expanded data; split larger datasets across archives.
 
-Available model names are `phone_cnn`, `temporal`, `mobile`, and `attention`. Compare their results on the same held-out dataset before choosing one; this repository does not establish a best architecture.
+## Audio and models
 
-The Python pipeline uses 8 kHz mono audio, a 300–3400 Hz bandpass, 3-second windows, 64 mel bands, a 512-point FFT, and a 256-sample hop. The models receive tensors shaped `(batch, 1, 64, 94)` and return two logits: real and fake. Softmax scores are not calibrated guarantees of authenticity.
+The Python pipeline uses 8 kHz mono audio, a 300–3400 Hz bandpass, three-second windows, 64 mel bands, a 512-point FFT, and a 256-sample hop. Model input is `(batch, 1, 64, 94)`; output is two logits for real and fake.
 
-## Export and Android status
+- `model/phone_augment.py`: filtering, augmentation, and mel features
+- `model/dataset.py`: loading and dataset splits
+- `model/model.py`: model definitions
+- `model/train.py` and `model/evaluate.py`: training, metrics, and plots
+- `scripts/test_detection.py`: inference from a checkpoint
+- `tests/`: synthetic unit and regression tests
 
-`model/export_tflite.py` contains an experimental PyTorch → ONNX → TensorFlow → TFLite path. It needs a separately configured, compatible TensorFlow/onnx-tf environment; installing the core requirements is insufficient. The script reports missing dependencies and checkpoints before writing export files.
+## Export and Android
 
-```bash
+`model/export_tflite.py` attempts PyTorch → ONNX → TensorFlow → TFLite conversion. It needs a separate, compatible TensorFlow/onnx-tf environment in addition to the core requirements. This path is experimental; a successful ONNX export does not establish that TFLite conversion or inference works.
+
+```sh
 python model/export_tflite.py --checkpoint checkpoints/best_model.pt --model mobile --output exported/model.tflite
 ```
 
-A successful ONNX export does not verify TFLite conversion or trained-model inference. Android preprocessing is checked against Python-generated synthetic fixtures for filtering, normalization, windowing, mel power, and decibel scaling. The classifier requires float32 input `[1, 1, 64, 94]` and float32 output `[1, 2]`; incompatible models produce an explanation instead of starting detection.
+The Android app captures microphone audio, not both sides of a phone call. Place a trained model at `android/app/src/main/assets/model.tflite`. Without it, the app explains what is missing and leaves recording off. Recording also requires microphone permission and pressing Start.
 
-The Android prototype captures microphone audio; it does not implement direct access to both sides of a phone call. It expects `android/app/src/main/assets/model.tflite`, which is absent. Without that asset, the app reports how to supply a model and leaves recording off. Microphone permission and the Start action are required before recording.
+The classifier expects float32 input `[1, 1, 64, 94]` and float32 output `[1, 2]`. Python/Kotlin preprocessing tests compare synthetic fixtures for filtering, normalization, windowing, mel power, and decibel scaling. Real-device recording and trained-model inference still need validation.
 
-With JDK 17 and Android SDK 34 installed, set `ANDROID_HOME` or the `sdk.dir` entry in an untracked `android/local.properties`, then run:
+With JDK 17 and Android SDK 34 installed, set `ANDROID_HOME` or `sdk.dir` in an untracked `android/local.properties`, then run:
 
-```bash
+```sh
 cd android
 ./gradlew assembleDebug testDebugUnitTest
 ```
 
-The JVM tests cover Python/Kotlin feature parity and missing-model startup with Robolectric. Regenerate the synthetic fixtures with `python scripts/generate_android_feature_fixtures.py` when intentionally changing preprocessing. The debug build and tests have been checked; real-device recording and trained-model inference still need validation.
+Regenerate fixtures with `python scripts/generate_android_feature_fixtures.py` when intentionally changing preprocessing.
 
-## Files
+## Datasets
 
-| Path | Purpose |
-|------|---------|
-| `model/phone_augment.py` | Phone-band filtering, optional augmentation, mel transform |
-| `model/dataset.py` | Audio loading and train/validation/test splits |
-| `model/model.py` | Four model architectures |
-| `model/train.py` | Training, gradient accumulation, logging, checkpoints |
-| `model/evaluate.py` | Evaluation metrics and plots |
-| `model/export_tflite.py` | Experimental mobile export |
-| `scripts/test_detection.py` | File inference from a saved checkpoint |
-| `scripts/` | Dataset preparation and optional TTS generators |
-| `android/` | Kotlin microphone/classifier prototype |
-| `tests/` | Synthetic unit and regression tests |
-
-## Dataset references
-
-Preparation scripts support datasets such as [ASVspoof](https://www.asvspoof.org/), [LibriSpeech](https://www.openslr.org/12), and LJSpeech, plus generated samples from several TTS systems. Obtain the datasets separately and follow their usage terms.
+Preparation scripts support [ASVspoof](https://www.asvspoof.org/), [LibriSpeech](https://www.openslr.org/12), LJSpeech, and generated samples from several TTS systems. Download the datasets separately and follow their usage terms.
 
 ## License
 
