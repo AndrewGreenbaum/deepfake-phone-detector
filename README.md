@@ -73,3 +73,7 @@ Preparation scripts support [ASVspoof](https://www.asvspoof.org/), [LibriSpeech]
 ## License
 
 MIT
+
+## Commit dates
+
+Some development commit dates are approximate reconstructions of batched checkpoints within the project’s recorded date range. They do not identify individual work sessions. Later security and documentation fixes keep their recorded dates.
